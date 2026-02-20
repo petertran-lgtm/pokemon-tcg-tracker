@@ -170,6 +170,7 @@ def get_cards():
                     "number": c.number,
                     "rarity": c.rarity,
                     "supertype": c.supertype,
+                    "image_url": c.image_url,
                     "latest_price": prices,
                 }
             )
@@ -214,6 +215,7 @@ def get_card(card_id: str):
             "number": card.number,
             "rarity": card.rarity,
             "supertype": card.supertype,
+            "image_url": card.image_url,
             "latest_price": prices,
         }
     finally:

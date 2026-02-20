@@ -13,6 +13,7 @@ class Card(Base):
     name = Column(String(128), nullable=False)
     set_id = Column(String(32), nullable=False)
     set_name = Column(String(128))
+    image_url = Column(String(512))  # Card art from TCGdex or pokemontcg.io
     number = Column(String(16))
     rarity = Column(String(64))
     supertype = Column(String(32))  # Pokemon, Trainer, Energy

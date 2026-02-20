@@ -52,6 +52,7 @@ def _normalize_tcgdex_to_internal(tcgdex: dict) -> dict:
         "number": str(tcgdex.get("localId", "")),
         "rarity": tcgdex.get("rarity", ""),
         "supertype": "Pokémon" if tcgdex.get("category") == "Pokemon" else tcgdex.get("category", ""),
+        "image": tcgdex.get("image") or "",
         "tcgplayer": {"prices": tcg_prices} if tcg_prices else {},
         "cardmarket": {"prices": cm_prices} if cm_prices else {},
     }
@@ -207,6 +208,8 @@ def _upsert_card(session, card_data: dict) -> Card:
     card.number = d.get("number", "")
     card.rarity = d.get("rarity", "")
     card.supertype = d.get("supertype", "")
+    img = d.get("image") or (d.get("images") or {}).get("large") or (d.get("images") or {}).get("small")
+    card.image_url = img or None
     card.updated_at = date.today()
     session.merge(card)
     return card

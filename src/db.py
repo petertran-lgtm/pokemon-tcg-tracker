@@ -18,6 +18,13 @@ def init_db():
     """Create tables if they don't exist. Import models before calling."""
     import src.models  # noqa: F401 - register tables with Base
     Base.metadata.create_all(engine)
+    # Migration: add image_url to cards if missing
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE cards ADD COLUMN image_url VARCHAR(512)"))
+            conn.commit()
+    except Exception:
+        pass  # column already exists
 
 
 def get_session():
