@@ -17,7 +17,7 @@ pip install -r requirements.txt
 POKEMON_TCG_API_KEY=your_key_here
 ```
 
-Run with `--debug` to verify the key is loaded. The API can be slow (30–60s per request); the fetcher retries on timeout.
+Run with `--debug` to verify. TCGdex is used first (no key needed); pokemontcg.io is fallback.
 
 ## Watchlist
 
@@ -50,10 +50,13 @@ python scripts/run_api.py
 Serves at http://localhost:8000. Docs at http://localhost:8000/docs.
 
 **Endpoints:**
-- `GET /api/watchlist` – card IDs in your watchlist
+- `GET /api/watchlist` – card IDs and card names in your watchlist
+- `POST /api/watchlist` – add a card (body: `{"card_id": "swsh4-25"}` or `{"card_name": "Charizard ex"}`)
+- `DELETE /api/watchlist` – remove a card (`?card_id=...` or `?card_name=...`)
 - `GET /api/cards` – all cards with latest prices
 - `GET /api/cards/{card_id}` – single card + latest price
 - `GET /api/prices/{card_id}` – price history (optional: `?variant=`, `?source=`, `?days=`)
+- `POST /api/refresh` – fetch latest prices from TCGdex and save to DB. Call from [cron-job.org](https://cron-job.org) (free) to schedule daily updates on Railway.
 
 **Scheduled (every 30 min) via cron:**
 
@@ -67,9 +70,13 @@ Or run manually when your machine is on.
 
 ## Data
 
-- **Source:** pokemontcg.io (TCGPlayer + CardMarket prices)
+- **Source:** [TCGdex](https://tcgdex.dev) (primary, free, no API key) and pokemontcg.io (fallback)
 - **Storage:** SQLite at `data/tcg_tracker.db`
 - **Tables:** `cards` (catalog), `price_snapshots` (history by variant/source)
+
+## For non-technical users
+
+See **GUIDE-FOR-NON-TECHNICAL-USERS.md** for simple instructions on adding and removing cards.
 
 ## Roadmap
 

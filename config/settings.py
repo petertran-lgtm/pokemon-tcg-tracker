@@ -14,6 +14,7 @@ DB_PATH = DATA_DIR / "tcg_tracker.db"
 # API
 POKEMON_TCG_API_KEY = os.getenv("POKEMON_TCG_API_KEY", "")  # Get free key at dev.pokemontcg.io
 POKEMON_TCG_BASE_URL = "https://api.pokemontcg.io/v2"
+TCGDEX_BASE_URL = "https://api.tcgdex.net/v2/en"
 
 # Rate limits (pokemontcg.io: 20k/day with key, 1k without)
 REQUEST_DELAY_SECONDS = 0.5  # Polite delay between API calls

@@ -1,4 +1,4 @@
-"""Fetch card data and prices from pokemontcg.io API."""
+"""Fetch card data and prices from TCGdex (primary) or pokemontcg.io (fallback)."""
 import time
 from datetime import date
 from typing import Optional
@@ -10,9 +10,77 @@ from config.settings import (
     POKEMON_TCG_API_KEY,
     POKEMON_TCG_BASE_URL,
     REQUEST_DELAY_SECONDS,
+    TCGDEX_BASE_URL,
 )
 from src.db import get_session, init_db
 from src.models import Card, PriceSnapshot
+
+
+def _normalize_tcgdex_to_internal(tcgdex: dict) -> dict:
+    """Convert TCGdex response to our internal format (compatible with save_card_prices)."""
+    set_info = tcgdex.get("set", {}) or {}
+    pricing = tcgdex.get("pricing", {}) or {}
+
+    # TCGPlayer: TCGdex uses lowPrice, midPrice, etc; we use low, mid, directLow
+    tcg = pricing.get("tcgplayer", {}) or {}
+    tcg_prices = {}
+    for variant, p in tcg.items():
+        if variant in ("updated", "unit") or not isinstance(p, dict):
+            continue
+        tcg_prices[variant] = {
+            "low": p.get("lowPrice"),
+            "mid": p.get("midPrice"),
+            "high": p.get("highPrice"),
+            "market": p.get("marketPrice"),
+            "directLow": p.get("directLowPrice"),
+        }
+    # CardMarket: TCGdex uses avg, low, trend, avg1, avg7, avg30
+    cm = pricing.get("cardmarket", {}) or {}
+    cm_prices = {
+        "lowPrice": cm.get("low"),
+        "trendPrice": cm.get("trend"),
+        "averageSellPrice": cm.get("avg"),
+        "avg1": cm.get("avg1"),
+        "avg7": cm.get("avg7"),
+        "avg30": cm.get("avg30"),
+    } if cm else {}
+
+    return {
+        "id": tcgdex.get("id", ""),
+        "name": tcgdex.get("name", ""),
+        "set": {"id": set_info.get("id", ""), "name": set_info.get("name", "")},
+        "number": str(tcgdex.get("localId", "")),
+        "rarity": tcgdex.get("rarity", ""),
+        "supertype": "Pokémon" if tcgdex.get("category") == "Pokemon" else tcgdex.get("category", ""),
+        "tcgplayer": {"prices": tcg_prices} if tcg_prices else {},
+        "cardmarket": {"prices": cm_prices} if cm_prices else {},
+    }
+
+
+def fetch_card_tcgdex(card_id: str, debug: bool = False) -> Optional[dict]:
+    """Fetch card from TCGdex (free, no API key, usually works). Returns normalized dict or None."""
+    url = f"{TCGDEX_BASE_URL}/cards/{card_id}"
+    try:
+        r = requests.get(url, timeout=15)
+        if debug:
+            print(f"  {card_id} [TCGdex]: status={r.status_code}", end="")
+        if r.status_code != 200:
+            if debug:
+                print()
+            return None
+        data = r.json()
+        if not data.get("pricing"):
+            if debug:
+                print(" -> no pricing")
+            return None
+        normalized = _normalize_tcgdex_to_internal(data)
+        if debug:
+            print(" -> OK")
+        return {"data": normalized}
+    except requests.exceptions.RequestException as e:
+        if debug:
+            print(f"  {card_id} [TCGdex]: ERROR - {e}")
+        return None
 
 
 def fetch_card(card_id: str, debug: bool = False, max_retries: int = 2) -> Optional[dict]:
@@ -52,6 +120,24 @@ def fetch_card(card_id: str, debug: bool = False, max_retries: int = 2) -> Optio
     return None
 
 
+def fetch_card_by_search_tcgdex(name: str, debug: bool = False) -> Optional[dict]:
+    """Search TCGdex by card name, fetch first match with pricing. Returns normalized dict or None."""
+    url = f"{TCGDEX_BASE_URL}/cards"
+    try:
+        r = requests.get(url, params={"name": f"eq:{name}"}, timeout=15)
+        if r.status_code != 200:
+            return None
+        results = r.json()
+        if not results or not isinstance(results, list):
+            return None
+        card_id = results[0].get("id")
+        if not card_id:
+            return None
+        return fetch_card_tcgdex(card_id, debug=debug)
+    except Exception:
+        return None
+
+
 def fetch_card_by_search(name: str, set_name: Optional[str] = None, debug: bool = False) -> Optional[dict]:
     """Fallback: search by name when direct ID fails. Returns first matching card or None."""
     url = f"{POKEMON_TCG_BASE_URL}/cards"
@@ -86,7 +172,10 @@ def fetch_watchlist(card_ids: list[str], card_names: Optional[list[str]] = None,
     if debug:
         print(f"Fetching {len(total)} cards...")
     for i, cid in enumerate(card_ids):
-        data = fetch_card(cid, debug=debug)
+        # Try TCGdex first (free, works); fall back to pokemontcg.io
+        data = fetch_card_tcgdex(cid, debug=debug)
+        if not data or "data" not in data:
+            data = fetch_card(cid, debug=debug)
         if data and "data" in data:
             results.append(data["data"])
         elif debug and (not data or "data" not in data):
@@ -94,7 +183,9 @@ def fetch_watchlist(card_ids: list[str], card_names: Optional[list[str]] = None,
         if i < len(card_ids) - 1:
             time.sleep(REQUEST_DELAY_SECONDS)
     for i, name in enumerate(names):
-        data = fetch_card_by_search(name, debug=debug)
+        data = fetch_card_by_search_tcgdex(name, debug=debug)
+        if not data or "data" not in data:
+            data = fetch_card_by_search(name, debug=debug)
         if data and "data" in data:
             results.append(data["data"])
             if debug:
@@ -122,7 +213,7 @@ def _upsert_card(session, card_data: dict) -> Card:
 
 
 def _parse_tcgplayer_prices(prices: dict, source: str = "tcgplayer") -> list[dict]:
-    """Extract price rows per variant from tcgplayer hash."""
+    """Extract price rows per variant from tcgplayer hash (pokemontcg or TCGdex normalized)."""
     rows = []
     if not prices:
         return rows
@@ -134,11 +225,11 @@ def _parse_tcgplayer_prices(prices: dict, source: str = "tcgplayer") -> list[dic
             "variant": variant,
             "source": source,
             "snapshot_date": today,
-            "low": p.get("low"),
-            "mid": p.get("mid"),
-            "high": p.get("high"),
-            "market": p.get("market"),
-            "direct_low": p.get("directLow"),
+            "low": p.get("low") or p.get("lowPrice"),
+            "mid": p.get("mid") or p.get("midPrice"),
+            "high": p.get("high") or p.get("highPrice"),
+            "market": p.get("market") or p.get("marketPrice"),
+            "direct_low": p.get("direct_low") or p.get("directLow") or p.get("directLowPrice"),
             "avg_1": None,
             "avg_7": None,
             "avg_30": None,
@@ -147,20 +238,19 @@ def _parse_tcgplayer_prices(prices: dict, source: str = "tcgplayer") -> list[dic
 
 
 def _parse_cardmarket_prices(prices: dict) -> list[dict]:
-    """Extract price rows from cardmarket hash (EU, has avg1/7/30)."""
+    """Extract price rows from cardmarket hash (EU, has avg1/7/30). Handles pokemontcg and TCGdex formats."""
     rows = []
     if not prices:
         return rows
     today = date.today()
-    # CardMarket uses different structure; map common variants
     rows.append({
         "variant": "normal",
         "source": "cardmarket",
         "snapshot_date": today,
-        "low": prices.get("lowPrice"),
+        "low": prices.get("lowPrice") or prices.get("low"),
         "mid": None,
         "high": None,
-        "market": prices.get("trendPrice") or prices.get("averageSellPrice"),
+        "market": prices.get("trendPrice") or prices.get("averageSellPrice") or prices.get("trend") or prices.get("avg"),
         "direct_low": prices.get("lowPriceExPlus"),
         "avg_1": prices.get("avg1"),
         "avg_7": prices.get("avg7"),

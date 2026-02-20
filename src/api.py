@@ -6,9 +6,11 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from src.db import get_session, init_db
 from src.models import Card, PriceSnapshot
+from src.fetcher import run_fetch
 
 app = FastAPI(
     title="Pokemon TCG Tracker API",
@@ -25,13 +27,21 @@ app.add_middleware(
 )
 
 
-def _load_watchlist() -> list[str]:
-    path = Path(__file__).resolve().parent.parent / "config" / "watchlist.json"
-    if not path.exists():
-        return []
-    with open(path) as f:
-        data = json.load(f)
-    return data.get("card_ids", [])
+WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "config" / "watchlist.json"
+WATCHLIST_MAX = 200
+
+
+def _load_watchlist_full() -> dict:
+    if not WATCHLIST_PATH.exists():
+        return {"card_ids": [], "card_names": []}
+    with open(WATCHLIST_PATH) as f:
+        return json.load(f)
+
+
+def _save_watchlist(data: dict) -> None:
+    WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(WATCHLIST_PATH, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 @app.get("/")
@@ -40,10 +50,89 @@ def root():
     return {"status": "ok", "service": "pokemon-tcg-tracker"}
 
 
+@app.post("/api/refresh")
+def refresh_prices():
+    """Fetch latest prices from TCGdex and save to DB. Call periodically (e.g. daily) to update data."""
+    try:
+        n = run_fetch(debug=False)
+        return {"status": "ok", "cards_updated": n}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/watchlist")
 def get_watchlist():
-    """Return watchlist card IDs."""
-    return {"card_ids": _load_watchlist()}
+    """Return watchlist card IDs and card names."""
+    data = _load_watchlist_full()
+    return {"card_ids": data.get("card_ids", []), "card_names": data.get("card_names", [])}
+
+
+class AddToWatchlist(BaseModel):
+    card_id: Optional[str] = None
+    card_name: Optional[str] = None
+
+
+@app.post("/api/watchlist")
+def add_to_watchlist(body: AddToWatchlist):
+    """Add a card to the watchlist by ID or name. Limit 200 total items."""
+    if body.card_id and body.card_name:
+        raise HTTPException(status_code=400, detail="Provide card_id OR card_name, not both")
+    if not body.card_id and not body.card_name:
+        raise HTTPException(status_code=400, detail="Provide card_id or card_name")
+    data = _load_watchlist_full()
+    ids = data.get("card_ids", [])
+    names = data.get("card_names", [])
+    if body.card_id:
+        if body.card_id in ids:
+            return {"status": "ok", "message": "Already in watchlist", "card_id": body.card_id}
+        if len(ids) + len(names) >= WATCHLIST_MAX:
+            raise HTTPException(status_code=400, detail=f"Watchlist full ({WATCHLIST_MAX} max)")
+        ids.append(body.card_id)
+        data["card_ids"] = ids
+    else:
+        if body.card_name in names:
+            return {"status": "ok", "message": "Already in watchlist", "card_name": body.card_name}
+        if len(ids) + len(names) >= WATCHLIST_MAX:
+            raise HTTPException(status_code=400, detail=f"Watchlist full ({WATCHLIST_MAX} max)")
+        names.append(body.card_name)
+        data["card_names"] = names
+    _save_watchlist(data)
+    return {"status": "ok", "card_id": body.card_id, "card_name": body.card_name}
+
+
+@app.delete("/api/watchlist")
+def remove_from_watchlist(card_id: Optional[str] = None, card_name: Optional[str] = None):
+    """Remove a card from the watchlist by ID or name."""
+    if card_id and card_name:
+        raise HTTPException(status_code=400, detail="Provide card_id OR card_name, not both")
+    if not card_id and not card_name:
+        raise HTTPException(status_code=400, detail="Provide card_id or card_name")
+    data = _load_watchlist_full()
+    ids = data.get("card_ids", [])
+    names = data.get("card_names", [])
+    if card_id:
+        if card_id not in ids:
+            raise HTTPException(status_code=404, detail="Card ID not in watchlist")
+        data["card_ids"] = [x for x in ids if x != card_id]
+    else:
+        if card_name in names:
+            data["card_names"] = [x for x in names if x != card_name]
+        else:
+            # Fallback: card may have been added by ID; look up by name in DB
+            init_db()
+            session = get_session()
+            try:
+                card = session.query(Card).filter(Card.name == card_name).first()
+                if card and card.id in ids:
+                    data["card_ids"] = [x for x in ids if x != card.id]
+                else:
+                    raise HTTPException(status_code=404, detail="Card name not in watchlist")
+            finally:
+                session.close()
+    _save_watchlist(data)
+    return {"status": "ok"}
 
 
 @app.get("/api/cards")
