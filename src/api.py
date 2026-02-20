@@ -1,5 +1,6 @@
 """FastAPI server that reads from the SQLite DB."""
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,20 @@ app.add_middleware(
 
 WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "config" / "watchlist.json"
 WATCHLIST_MAX = 200
+
+
+def _image_url_for_card(card: Card) -> Optional[str]:
+    """Return image URL from DB, or derive TCGdex URL when null. TCGdex hosts free card art."""
+    if card.image_url:
+        return card.image_url
+    # Fallback: TCGdex URL pattern https://assets.tcgdex.net/en/{series}/{set_id}/{number}
+    # e.g. swsh4-25 -> swsh/swsh4/25, base1-4 -> base/base1/4
+    if card.set_id and card.number:
+        series = re.match(r"^([a-zA-Z]+)", card.set_id)
+        if series:
+            base = f"https://assets.tcgdex.net/en/{series.group(1)}/{card.set_id}/{card.number}"
+            return base
+    return None
 
 
 def _load_watchlist_full() -> dict:
@@ -170,7 +185,7 @@ def get_cards():
                     "number": c.number,
                     "rarity": c.rarity,
                     "supertype": c.supertype,
-                    "image_url": c.image_url,
+                    "image_url": _image_url_for_card(c),
                     "latest_price": prices,
                 }
             )
@@ -215,7 +230,7 @@ def get_card(card_id: str):
             "number": card.number,
             "rarity": card.rarity,
             "supertype": card.supertype,
-            "image_url": card.image_url,
+            "image_url": _image_url_for_card(card),
             "latest_price": prices,
         }
     finally:

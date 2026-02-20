@@ -11,7 +11,7 @@ Open your PokéMarket project in Lovable, then paste the text below into the cha
 Display the card image on each watchlist card.
 
 **What to do:**
-- Each card in GET `/api/cards` now includes an `image_url` field (a URL to the card art).
+- Each card in GET `/api/cards` includes an `image_url` field (a URL to the card art, from TCGdex). The API always returns this when available.
 - For each card in the watchlist grid, show the card image using this URL.
 - Put the image at the top or left of each card tile, before the card name.
 - Use a reasonable size (e.g. 150–200px width) so the card is recognizable but doesn't dominate the layout.
@@ -27,7 +27,7 @@ Display the card image on each watchlist card.
               [Remove button]
 ```
 
-The API already returns `image_url` for each card. Use it in an `<img>` tag with `src={card.image_url}` and appropriate `alt` text (e.g. the card name).
+Use `card.image_url` in an `<img>` tag: `src={card.image_url}` with `alt={card.name}`. Only render the image when `image_url` is truthy; otherwise show the placeholder.
 
 ---
 
