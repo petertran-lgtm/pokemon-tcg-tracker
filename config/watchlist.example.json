@@ -1,0 +1,8 @@
+{
+  "card_ids": [
+    "swsh4-25",
+    "swsh12-177",
+    "sv3-154"
+  ],
+  "_comment": "Add up to 200 card IDs from pokemontcg.io (e.g. swsh4-25 = Vivid Voltage Charizard). Copy to watchlist.json and populate."
+}
